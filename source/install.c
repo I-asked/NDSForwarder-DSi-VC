@@ -17,8 +17,14 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <alloca.h>
+#include <ctype.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 #include <nds.h>
@@ -30,11 +36,39 @@
 #include "rom.h"
 #include "storage.h"
 
-// hardcode the only two constants. This may be changed one day, will just release a new one at that point anyway
+#define wrapper_location 0x1DD4C
+#define wrapper_location_fc 0x1962C
 #define gamepath_location 0x1DD74
 #define gamepath_location_fc 0x19655
 #define gamepath_length 252
 #define gamepath_length_fc 251
+
+const char *_wrappers[][2] = {
+  { "gba", "sd:/_nds/gbarunner3.nds" },
+};
+
+static int _compareWrappers(const void *a, const void *b) {
+  return strcmp(*(const char **)a, *(const char **)b);
+}
+
+const char *findWrapper(const char *fpath) {
+  const char *fext = strrchr(fpath, '.');
+  if (fext == NULL) {
+    return NULL;
+  }
+  fext++;
+
+  char *needle[2] = { strdup(fext), NULL };
+  for (char *pNeedle = needle[0]; *pNeedle; pNeedle++) {
+    *pNeedle = tolower(*pNeedle);
+  }
+
+  const char *wrapper = bsearch(&needle, _wrappers, sizeof(_wrappers) / sizeof(*_wrappers), sizeof(*_wrappers), _compareWrappers);
+  if (wrapper != NULL) wrapper = ((const char **)wrapper)[1];
+  free(needle[0]);
+
+  return wrapper;
+}
 
 static bool _titleIsUsed(tDSiHeader* h)
 {
@@ -147,6 +181,23 @@ bool installError(char* error)
 
 static bool _generateFcForwarder(char* fpath, char* templatePath)
 {
+#if 0
+  const char *fext = strrchr(fpath, '.');
+  if (fext == NULL) {
+    fext = "nds";
+  } else {
+    fext++;
+  }
+  char *needle = strdup(fext);
+  char *pNeedle = needle;
+  for (; *pNeedle; pNeedle++)
+    *pNeedle = tolower(*pNeedle);
+
+  const char *wrapper = bsearch(&fext, _wrappers, sizeof(_wrappers) / sizeof(*_wrappers), sizeof(*_wrappers), _compareWrappers);
+  if (wrapper != NULL) wrapper = ((const char **)wrapper)[1];
+  free(needle);
+  pNeedle = needle = NULL;
+
 	// extract template
 	mkdir("/_nds", 0777);
 	remove(templatePath);
@@ -155,28 +206,44 @@ static bool _generateFcForwarder(char* fpath, char* templatePath)
 
 	tDSiHeader* templateheader = getRomHeader(templatePath);
 	if(templateheader == NULL) return installError("Failed to read template header.\n");
-	tNDSHeader* targetheader = getRomHeaderNDS(fpath);
-	if(targetheader == NULL) return installError("Failed to read target header.\n");
+	if (wrapper == NULL) {
+    tNDSHeader *targetheader = getRomHeaderNDS(fpath);
+    if(targetheader == NULL) return installError("Failed to read target header.\n");
 
+    // header operations
+    if(swiCRC16(0xFFFF, targetheader, 0x15E) != targetheader->headerCRC16) {
+      free(targetheader);
+      free(templateheader);
+      return installError("Header CRC check failed. This ROM may be corrupt.\n");
+    }
 
-	// header operations
-	if(swiCRC16(0xFFFF, targetheader, 0x15E) != targetheader->headerCRC16) {
-		free(targetheader);
-		free(templateheader);
-		return installError("Header CRC check failed. This ROM may be corrupt.\n");
-	}
-
-	free(targetheader);
+    free(targetheader);
+  }
 
 	// banner operations
-	sNDSBannerExt* targetbanner = getRomBanner(fpath);
-	if(targetbanner == NULL) return installError("Failed to read target banner.\n");
+	sNDSBannerExt* targetbanner = NULL;
+	if (wrapper != NULL) {
+    targetbanner = getRomBanner(fpath);
+    if(targetbanner == NULL) return installError("Failed to read target banner.\n");
+  } else {
+    char bpath[strlen(fpath) + 5];
+    strncpy(bpath, fpath, (strlen(fpath) - strlen(fext)) + 1);
+    strcat(bpath, "bin");
+    FILE *bf = fopen(bpath, "r");
+    if (bf == NULL) return installError("Failed to open standalone banner (.bin) file for reading.\n");
+    targetbanner = calloc(1, 0x840);
+    if (fread(targetbanner, 0x840, 1, bf) != 0x840) {
+      fclose(bf);
+      free(targetbanner);
+      return installError("Failed to read standalone banner (.bin) file.\n");
+    }
+    fclose(bf);
+  }
 
-	targetbanner->version = NDS_BANNER_VER_ORIGINAL;
-	targetbanner->crc[1] = 0;
-	targetbanner->crc[2] = 0;
-	targetbanner->crc[3] = 0;
-
+  targetbanner->version = NDS_BANNER_VER_ORIGINAL;
+  targetbanner->crc[1] = 0;
+  targetbanner->crc[2] = 0;
+  targetbanner->crc[3] = 0;
 
 	// actually writing stuff now
 	// write header
@@ -197,55 +264,134 @@ static bool _generateFcForwarder(char* fpath, char* templatePath)
 	fwrite(fpath, sizeof(char), gamepath_length_fc, template);
 	fflush(template);
 
+  // write wrapper path if needed
+  if (wrapper != NULL) {
+    fseek(template, wrapper_location_fc, SEEK_SET);
+    fwrite(wrapper, sizeof(char), strlen(wrapper) + 1, template);
+    fflush(template);
+    iprintf("wrapper patched to %s\n", wrapper);
+  }
+
 	// complete
 	fclose(template);
 	iprintf("Forwarder created.\n\n");
 	return true;
+#else
+  return installError("Currently unsupported.\n");
+#endif
 }
 
 static bool _generateForwarder(char* fpath, char* templatePath)
 {
+  const char *wrapper = NULL;
+
+  const char *ofext = strrchr(fpath, '.');
+  if (ofext != NULL) {
+    ofext++;
+  }
+
+  {
+    const char *fext = ofext;
+    if (fext == NULL) {
+      fext = "nds";
+    }
+
+    char *needle[2] = { strdup(fext), NULL };
+    for (char *pNeedle = needle[0]; *pNeedle; pNeedle++) {
+      *pNeedle = tolower(*pNeedle);
+    }
+
+    iprintf("Template <- [%s] \"%s\".\n", needle[0], fpath);
+    wrapper = bsearch(&needle, _wrappers, sizeof(_wrappers) / sizeof(*_wrappers), sizeof(*_wrappers), _compareWrappers);
+    if (wrapper != NULL) wrapper = ((const char **)wrapper)[1];
+    free(needle[0]);
+  }
+
+  if (ofext == NULL) {
+    ofext = fpath + strlen(fpath);
+  }
+
 	// extract template
 	mkdir("/_nds", 0777);
 	remove(templatePath);
 	copyFile("nitro:/sdcard.nds", templatePath);
-	iprintf("Template copied to SD.\n");
+
+	if (wrapper) iprintf("Using wrapper \"%s\".\n", wrapper);
 
 	// DSiWare check
-	tDSiHeader* targetDSiWareCheck = getRomHeader(fpath);
-	if (targetDSiWareCheck == NULL) return installError("Failed to read template header.\n");
-	if ((targetDSiWareCheck->tid_high & 0xFF) > 0)
-	{
-		bool choice = choicePrint("This is a DSiWare title!\nYou can install directly using\nTMFH instead, for full \ncompatibility.\nInstall anyway?");
-		if(!choice) {
-			free(targetDSiWareCheck);
-			return installError("User cancelled install.\n");
-		}
-	}
-	free(targetDSiWareCheck);
+	if (wrapper == NULL) {
+    tDSiHeader* targetDSiWareCheck = getRomHeader(fpath);
+    if (targetDSiWareCheck == NULL) return installError("Failed to read template header.\n");
+    if ((targetDSiWareCheck->tid_high & 0xFF) > 0)
+    {
+      bool choice = choicePrint("This is a DSiWare title!\nYou can install directly using\nTMFH instead, for full \ncompatibility.\nInstall anyway?");
+      if(!choice) {
+        free(targetDSiWareCheck);
+        return installError("User cancelled install.\n");
+      }
+    }
+    free(targetDSiWareCheck);
+  }
 
 	tDSiHeader* templateheader = getRomHeader(templatePath);
 	if(templateheader == NULL) return installError("Failed to read template header.\n");
-	tNDSHeader* targetheader = getRomHeaderNDS(fpath);
-	if(targetheader == NULL) return installError("Failed to read target header.\n");
+	if (wrapper == NULL) {
+    tNDSHeader *targetheader = getRomHeaderNDS(fpath);
+    if(targetheader == NULL) return installError("Failed to read target header.\n");
 
+    // header operations
+    if(swiCRC16(0xFFFF, targetheader, 0x15E) != targetheader->headerCRC16) {
+      free(targetheader);
+      free(templateheader);
+      return installError("Header CRC check failed. This ROM may be corrupt.\n");
+    }
 
-	// header operations
-	if(swiCRC16(0xFFFF, targetheader, 0x15E) != targetheader->headerCRC16) {
-		free(targetheader);
-		free(templateheader);
-		return installError("Header CRC check failed. This ROM may be corrupt.\n");
-	}
-
-	memcpy(templateheader->ndshdr.gameTitle, targetheader->gameTitle, 12);
-	memcpy(templateheader->ndshdr.gameCode, targetheader->gameCode, 4);
-	templateheader->tid_low = __builtin_bswap32((*(u32*)targetheader->gameCode));
-	templateheader->ndshdr.headerCRC16 = swiCRC16(0xFFFF, &templateheader->ndshdr, 0x15E);
-	free(targetheader);
+    memcpy(templateheader->ndshdr.gameTitle, targetheader->gameTitle, 12);
+    memcpy(templateheader->ndshdr.gameCode, targetheader->gameCode, 4);
+    templateheader->tid_low = __builtin_bswap32((*(u32*)targetheader->gameCode));
+    templateheader->ndshdr.headerCRC16 = swiCRC16(0xFFFF, &templateheader->ndshdr, 0x15E);
+    free(targetheader);
+  }
 
 	// banner operations
-	sNDSBannerExt* targetbanner = getRomBanner(fpath);
-	if(targetbanner == NULL) return installError("Failed to read target banner.\n");
+	sNDSBannerExt* targetbanner = NULL;
+  do {
+    char bpath[strlen(fpath) + 5];
+    memset(bpath, 0, sizeof(bpath));
+    strcpy(bpath, fpath);
+    strcat(bpath, ".bin");
+    FILE *bf = fopen(bpath, "r");
+    if (bf == NULL) {
+      if (wrapper != NULL) {
+        return installError("Failed to open standalone banner (.bin) file for reading.\n");
+      } else {
+        break;
+      }
+    }
+    targetbanner = calloc(1, sizeof(sNDSBannerExt));
+    if (!targetbanner) {
+      fclose(bf);
+      return installError("Out of memory.\n");
+    }
+    unsigned total = 0, read = 0;
+    while ((read = fread(targetbanner, 1, sizeof(sNDSBannerExt), bf)) >= 0) {
+      total += read;
+      if (feof(bf)) {
+        break;
+      }
+    }
+    if (total < 0x840) {
+      fclose(bf);
+      free(targetbanner);
+      return installError("Failed to read standalone banner (.bin) file.\n");
+    }
+    fclose(bf);
+  } while (0) ;
+
+  if (targetbanner == NULL) {
+    targetbanner = getRomBanner(fpath);
+    if(targetbanner == NULL) return installError("Failed to read target banner.\n");
+  }
 
 	// Only check up to ZH_KO. DSi is checked separately, and can be fixed by nulling the DSi data, but the rest needs to be intact.
 	bool crccheck = true;
@@ -307,6 +453,14 @@ static bool _generateForwarder(char* fpath, char* templatePath)
 	fseek(template, gamepath_location, SEEK_SET);
 	fwrite(fpath, sizeof(char), gamepath_length, template);
 	fflush(template);
+
+  // write wrapper path if needed
+  if (wrapper != NULL) {
+    fseek(template, wrapper_location, SEEK_SET);
+    fwrite(wrapper, sizeof(char), strlen(wrapper) + 1, template);
+    fflush(template);
+    iprintf("wrapper patched to %s\n", wrapper);
+  }
 
 	// complete
 	fclose(template);

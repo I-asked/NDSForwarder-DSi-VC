@@ -28,7 +28,7 @@
 #include "message.h"
 #include "nitrofs.h"
 
-#define VERSION "0.3.1"
+#define VERSION "0.3.1-mod"
 
 PrintConsole topScreen;
 PrintConsole bottomScreen;
@@ -63,11 +63,12 @@ static int _mainMenu(int cursor)
 	//top screen
 	clearScreen(&topScreen);
 
-	iprintf("\tNDSForwarder for hiyaCFW\n   and flashcards\n");
+	iprintf("\tNDSForwarder for hiyaCFW\n\n");
 	iprintf("\nversion %s\n", VERSION);
-	iprintf("\x1b[21;0HJeff - 2018-2019");
-	iprintf("\x1b[22;0Hlifehackerhansol - 2022-2023");
-	iprintf("\x1b[23;0HRocket Robz - 2023");
+	iprintf("\x1b[20;0HJeff - 2018-2019");
+	iprintf("\x1b[21;0Hlifehackerhansol - 2022-2023");
+	iprintf("\x1b[22;0HRocket Robz - 2023");
+	iprintf("\x1b[23;0Hsome clouds - 2025");
 
 	//menu
 	Menu* m = newMenu();

@@ -24,6 +24,7 @@
 
 typedef struct {
 	bool directory;
+	bool wrapped;
 	char* label;
 	char* value;
 } Item;
@@ -41,7 +42,7 @@ typedef struct {
 Menu* newMenu();
 void freeMenu(Menu* m);
 
-void addMenuItem(Menu* m, char const* label, char const* value, bool directory);
+void addMenuItem(Menu* m, char const* label, char const* value, int flags);
 void setMenuHeader(Menu* m, char* str);
 
 void resetMenu(Menu* m);

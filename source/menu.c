@@ -55,14 +55,15 @@ void freeMenu(Menu* m)
 	m = NULL;
 }
 
-void addMenuItem(Menu* m, char const* label, char const* value, bool directory)
+void addMenuItem(Menu* m, char const* label, char const* value, int flags)
 {
 	if (!m) return;
 
 	int i = m->itemCount;
 	if (i >= ITEMS_PER_PAGE) return;
 
-	m->items[i].directory = directory;
+  m->items[i].directory = flags & 1;
+  m->items[i].wrapped = flags & 2;
 
 	if (label)
 	{

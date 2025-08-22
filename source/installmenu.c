@@ -17,10 +17,13 @@
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <dirent.h>
 
 #include <nds.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "main.h"
 #include "rom.h"
@@ -40,6 +43,18 @@ static char currentDir[512] = "";
 static void generateList(Menu* m);
 static void printItem(Menu* m);
 static int subMenu();
+
+static int extcmp(const char *file, const char *exp) {
+  char *ext = strrchr(file, '.');
+  if (!ext) {
+    return -1;
+  }
+  ext = strdup(ext + 1);
+  for (char *pChr = ext; *pChr; pChr++)
+    *pChr = tolower(*pChr);
+  int res = strcmp(ext, exp);
+  free(ext);
+}
 
 static void _setHeader(Menu* m)
 {
@@ -199,14 +214,14 @@ static void generateList(Menu* m)
 			}
 			else
 			{
-				if (strstr(ent->d_name, ".nds") != NULL ||
-					strstr(ent->d_name, ".ids") != NULL ||
-					strstr(ent->d_name, ".app") != NULL ||
-					strstr(ent->d_name, ".dsi") != NULL ||
-					strstr(ent->d_name, ".NDS") != NULL ||
-					strstr(ent->d_name, ".APP") != NULL ||
-					strstr(ent->d_name, ".DSI") != NULL ||
-					strstr(ent->d_name, ".IDS") != NULL)
+        extern const char *_wrappers[][2];
+        extern const char *findWrapper(const char *fpath);
+        const char *wrapper = NULL;
+				if (!extcmp(ent->d_name, "nds") ||
+					!extcmp(ent->d_name, "ids") ||
+					!extcmp(ent->d_name, "app") ||
+					!extcmp(ent->d_name, "dsi") ||
+					(wrapper = findWrapper(ent->d_name)))
 				{
 					if (count < m->page * ITEMS_PER_PAGE)
 						count += 1;
@@ -221,7 +236,7 @@ static void generateList(Menu* m)
 							char* fpath = (char*)malloc(strlen(currentDir) + strlen(ent->d_name) + 8);
 							sprintf(fpath, "%s/%s", currentDir, ent->d_name);
 
-							addMenuItem(m, ent->d_name, fpath, 0);
+							addMenuItem(m, ent->d_name, fpath, wrapper ? 2 : 0);
 
 							free(fpath);
 						}
@@ -247,7 +262,7 @@ static void printItem(Menu* m)
 	if (!m) return;
 	if (m->itemCount <= 0) return;
 
-	if (m->items[m->cursor].directory)
+	if (m->items[m->cursor].directory || m->items[m->cursor].wrapped)
 		clearScreen(&topScreen);
 	else
 		printRomInfo(m->items[m->cursor].value);
