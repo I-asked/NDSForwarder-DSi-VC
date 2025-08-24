@@ -44,7 +44,9 @@
 #define gamepath_length_fc 251
 
 const char *_wrappers[][2] = {
+  { "gb", "sd:/_nds/gameyob.nds" },
   { "gba", "sd:/_nds/gbarunner3.nds" },
+  { "gbc", "sd:/_nds/gameyob.nds" },
 };
 
 static int _compareWrappers(const void *a, const void *b) {
